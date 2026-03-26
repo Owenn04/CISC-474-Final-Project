@@ -2,12 +2,6 @@
 
 ![visualization](media/sneaky_enemies.gif "Sneaky Enemies sample layout")
 
-## Overview
-
-Environment created for the students of the Reinforcement Learning course (CISC 474) of Winter 2025 at Queen's 
-University, taught by Prof. Sidney Givigi. As their course project, students must train an agent in the environment, 
-modifying the observation space and doing reward shaping to achieve a robust agent that covers diverse maps quickly.
-
 ## Installation
 
 To install the environment, simply run: 
@@ -15,6 +9,71 @@ To install the environment, simply run:
 ```bash
 pip install -e coverage-gridworld
 ```
+
+## Standard project environment
+
+For group work, use the same Python version and dependency files on every machine:
+
+- Python `3.11`
+- `requirements.txt` for a standard `venv` workflow
+- `environment.yml` for an Anaconda/Miniconda workflow
+
+### Option 1: VS Code + venv
+
+This is the simplest cross-platform setup for Windows and macOS.
+
+1. Create the virtual environment from the project root:
+
+```bash
+python -m venv .venv
+```
+
+2. Activate it:
+
+Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+macOS terminal:
+
+```bash
+source .venv/bin/activate
+```
+
+3. Install the shared dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+4. In VS Code, select the interpreter inside `.venv`.
+
+Recommended team convention:
+- everyone names the environment `.venv`
+- everyone uses Python `3.11`
+- everyone installs with `pip install -r requirements.txt`
+
+### Option 2: Anaconda / Miniconda
+
+Create the shared environment from the root of the repo:
+
+```bash
+conda env create -f environment.yml
+conda activate coverage-gridworld
+```
+
+This gives the team the same Python version and the same pip-installed project dependencies on Windows and macOS.
+
+### Updating dependencies
+
+When the project needs a new package, add it to:
+
+- `requirements.txt`
+- `environment.yml`
+
+This keeps both workflows aligned for the whole group.
 
 ## Rules
 
@@ -34,7 +93,7 @@ There are three ways of defining the map layouts to be used:
 
 ### Standard maps
 
-Three standard maps are included in the `\coverage_gridworld\__init.py__` file: 
+Five standard maps are included in the `\coverage_gridworld\__init.py__` file: 
 - `just_go`: very easy difficulty map, 0 enemies and barely any walls, a simple validation test for algorithms,
 - `safe`: easy difficulty map, 0 enemies and many walls,
 - `maze`: medium difficulty map, 2 enemies and focuses mostly on movement,
@@ -42,7 +101,7 @@ Three standard maps are included in the `\coverage_gridworld\__init.py__` file:
 - `sneaky_enemies`: very hard difficulty map, 5 enemies and many walls, with some cells being surveilled by multiple 
 enemies.
 
-The standard maps can be used by using their tag on `gymnasium.make()`. For example:
+The standard maps can be employed by using their tag on `gymnasium.make()`. For example:
 
 ```python
 gymnasium.make("sneaky_enemies", render_mode="human", predefined_map_list=None)
@@ -108,14 +167,14 @@ The transitions are deterministic.
 ### Rewards
 The reward scheme must be implemented on the `custom.py` file, penalizing or rewarding certain
 behaviors (e.g. hitting a wall, not moving, walking over an explored cell, etc.). The `info` dictionary returned
-by the step method may be used for that.
+by the step method may be used for that. Note that not all values within the `info` dictionary need to be used.
 
 ### Episode End
 
 By default, an episode ends if any of the following happens:
 - The player dies (gets spotted by an enemy),
 - Explores all tiles,
-- Time runs out.
+- Time runs out (500 steps are taken).
 
 
 ## Testing
