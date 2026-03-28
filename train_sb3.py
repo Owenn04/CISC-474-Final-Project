@@ -1,19 +1,114 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from pathlib import Path
+import random
 
 import gymnasium as gym
 import coverage_gridworld 
+import torch as th
+from torch import nn
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 
 SUPPORTED_ALGORITHMS = {
     "ppo": PPO,
     "dqn": DQN,
 }
+
+MAP_SETS = {
+    "all_standard_maps": ["just_go", "safe", "maze", "chokepoint", "sneaky_enemies"],
+    "all_standard_plus_custom": ["just_go", "safe", "maze", "custom_challenge", "chokepoint", "sneaky_enemies"],
+    "coverage_curriculum": ["just_go", "safe", "maze"],
+    "enemy_mix": ["maze", "chokepoint", "sneaky_enemies"],
+    "generalization_train": ["safe", "maze", "chokepoint"],
+    "generalization_test": ["sneaky_enemies"],
+}
+
+
+class SmallGridCNN(BaseFeaturesExtractor):
+    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 128):
+        super().__init__(observation_space, features_dim)
+        channels = observation_space.shape[0]
+
+        self.cnn = nn.Sequential(
+            nn.Conv2d(channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        with th.no_grad():
+            sample = th.as_tensor(observation_space.sample()[None]).float()
+            n_flatten = self.cnn(sample).shape[1]
+
+        self.linear = nn.Sequential(
+            nn.Linear(n_flatten, features_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, observations: th.Tensor) -> th.Tensor:
+        return self.linear(self.cnn(observations.float()))
+
+
+class MixedMapEnv(gym.Env):
+    def __init__(
+        self,
+        *,
+        observation_mode: str,
+        reward_mode: str,
+        fixed_maps: list[list[list[int]]],
+        random_standard_prob: float,
+        render_mode: str | None = None,
+        activate_game_status: bool = False,
+        seed: int = 42,
+    ):
+        super().__init__()
+        self.base_env = gym.make(
+            "standard",
+            render_mode=render_mode,
+            predefined_map_list=None,
+            activate_game_status=activate_game_status,
+            observation_mode=observation_mode,
+            reward_mode=reward_mode,
+        )
+        self.observation_space = self.base_env.observation_space
+        self.action_space = self.base_env.action_space
+        self.fixed_maps = [copy.deepcopy(map_layout) for map_layout in fixed_maps]
+        self.random_standard_prob = random_standard_prob
+        self.fixed_map_index = 0
+        self.rng = random.Random(seed)
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        if seed is not None:
+            self.rng.seed(seed)
+
+        use_random_standard = self.rng.random() < self.random_standard_prob
+        unwrapped = self.base_env.unwrapped
+        unwrapped.predefined_map_list = None
+        unwrapped.current_predefined_map = 0
+
+        if use_random_standard:
+            unwrapped.predefined_map = None
+        else:
+            unwrapped.predefined_map = copy.deepcopy(self.fixed_maps[self.fixed_map_index])
+            self.fixed_map_index = (self.fixed_map_index + 1) % len(self.fixed_maps)
+
+        return self.base_env.reset(seed=seed, options=options)
+
+    def step(self, action):
+        return self.base_env.step(action)
+
+    def render(self):
+        return self.base_env.render()
+
+    def close(self):
+        self.base_env.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,17 +156,45 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--observation-mode",
-        choices=["full_grid", "compact"],
+        choices=["full_grid", "compact", "hybrid", "grid_cnn", "simple_progress", "baseline_obs_v1", "baseline_obs_v2", "baseline_obs_v3", "baseline_obs_v4"],
         default="full_grid",
         help="Observation mode exposed by the environment.",
     )
     parser.add_argument(
         "--reward-mode",
-        choices=["sparse", "coverage", "safety"],
+        choices=["sparse", "coverage", "safety", "baseline_coverage", "baseline_reward_v1", "baseline_reward_v2", "baseline_reward_v3"],
         default="coverage",
         help="Reward mode exposed by the environment.",
     )
+    parser.add_argument(
+        "--map-set",
+        choices=sorted(MAP_SETS.keys()),
+        default=None,
+        help="Optional predefined training map set. When provided, training uses env-id='standard' with a rotating predefined_map_list.",
+    )
+    parser.add_argument(
+        "--eval-env-id",
+        default=None,
+        help="Optional environment id for evaluation. Defaults to the training env id, or 'standard' if --map-set is used.",
+    )
+    parser.add_argument(
+        "--random-standard-prob",
+        type=float,
+        default=0.0,
+        help="When used with --map-set, probability that an episode uses a random 'standard' map instead of the next fixed map.",
+    )
     return parser.parse_args()
+
+
+def build_predefined_map_list(map_ids: list[str]) -> list[list[list[int]]]:
+    maps: list[list[list[int]]] = []
+    for map_id in map_ids:
+        spec = gym.spec(map_id)
+        predefined_map = spec.kwargs.get("predefined_map")
+        if predefined_map is None:
+            raise ValueError(f"Map '{map_id}' does not expose a predefined_map and cannot be used in a map set.")
+        maps.append(copy.deepcopy(predefined_map))
+    return maps
 
 
 def make_env(
@@ -80,23 +203,38 @@ def make_env(
     seed: int,
     observation_mode: str,
     reward_mode: str,
+    predefined_map_list: list[list[list[int]]] | None = None,
+    random_standard_prob: float = 0.0,
     render: bool = False,
 ) -> Monitor:
     render_mode = "human" if render else None
-    env = gym.make(
-        env_id,
-        render_mode=render_mode,
-        predefined_map_list=None,
-        activate_game_status=False,
-        observation_mode=observation_mode,
-        reward_mode=reward_mode,
-    )
+    if predefined_map_list is not None and random_standard_prob > 0.0:
+        env = MixedMapEnv(
+            observation_mode=observation_mode,
+            reward_mode=reward_mode,
+            fixed_maps=predefined_map_list,
+            random_standard_prob=random_standard_prob,
+            render_mode=render_mode,
+            activate_game_status=False,
+            seed=seed,
+        )
+    else:
+        env = gym.make(
+            env_id,
+            render_mode=render_mode,
+            predefined_map_list=predefined_map_list,
+            activate_game_status=False,
+            observation_mode=observation_mode,
+            reward_mode=reward_mode,
+        )
     env.reset(seed=seed)
     return Monitor(env)
 
 
 def build_model(algorithm: str, env: Monitor, log_dir: Path, seed: int):
     model_class = SUPPORTED_ALGORITHMS[algorithm]
+    observation_shape = getattr(env.observation_space, "shape", ())
+    policy = "CnnPolicy" if len(observation_shape) == 3 else "MlpPolicy"
 
     common_kwargs = {
         "env": env,
@@ -104,12 +242,17 @@ def build_model(algorithm: str, env: Monitor, log_dir: Path, seed: int):
         "seed": seed,
         "tensorboard_log": str(log_dir),
     }
+    if policy == "CnnPolicy":
+        common_kwargs["policy_kwargs"] = {
+            "features_extractor_class": SmallGridCNN,
+            "features_extractor_kwargs": {"features_dim": 128},
+        }
 
     if algorithm == "ppo":
-        return model_class("MlpPolicy", **common_kwargs)
+        return model_class(policy, **common_kwargs)
 
     if algorithm == "dqn":
-        return model_class("MlpPolicy", learning_starts=1_000, buffer_size=50_000, **common_kwargs)
+        return model_class(policy, learning_starts=1_000, buffer_size=50_000, **common_kwargs)
 
     raise ValueError(f"Unsupported algorithm: {algorithm}")
 
@@ -123,25 +266,41 @@ def main() -> None:
     model_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    predefined_map_list = None
+    train_env_id = args.env_id
+    if args.map_set is not None:
+        predefined_map_list = build_predefined_map_list(MAP_SETS[args.map_set])
+        train_env_id = "standard"
+
     train_env = make_env(
-        args.env_id,
+        train_env_id,
         seed=args.seed,
         observation_mode=args.observation_mode,
         reward_mode=args.reward_mode,
+        predefined_map_list=predefined_map_list,
+        random_standard_prob=args.random_standard_prob,
     )
     model = build_model(args.algorithm, train_env, log_dir, args.seed)
     model.learn(total_timesteps=args.timesteps, progress_bar=True)
 
+    env_label = args.map_set or args.env_id
+    if args.map_set is not None and args.random_standard_prob > 0.0:
+        env_label = f"{env_label}_rand{int(args.random_standard_prob * 100):02d}"
+
     model_path = model_dir / (
-        f"{args.algorithm}_{args.env_id}_{args.observation_mode}_{args.reward_mode}_{args.timesteps}.zip"
+        f"{args.algorithm}_{env_label}_{args.observation_mode}_{args.reward_mode}_{args.timesteps}.zip"
     )
     model.save(model_path)
 
+    eval_env_id = args.eval_env_id or train_env_id
+    eval_predefined_map_list = predefined_map_list if eval_env_id == "standard" else None
     eval_env = make_env(
-        args.env_id,
+        eval_env_id,
         seed=args.seed,
         observation_mode=args.observation_mode,
         reward_mode=args.reward_mode,
+        predefined_map_list=eval_predefined_map_list,
+        random_standard_prob=0.0,
         render=args.render,
     )
     mean_reward, std_reward = evaluate_policy(

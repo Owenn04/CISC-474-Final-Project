@@ -16,7 +16,7 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 
 
 MODEL_PATTERN = re.compile(
-    r"^(?P<algorithm>ppo|dqn)_(?P<env_id>.+)_(?P<observation_mode>full_grid|compact)_(?P<reward_mode>sparse|coverage|safety)_(?P<timesteps>\d+)\.zip$"
+    r"^(?P<algorithm>ppo|dqn)_(?P<env_id>.+)_(?P<observation_mode>full_grid|compact|hybrid|grid_cnn|simple_progress|baseline_obs_v1|baseline_obs_v2|baseline_obs_v3|baseline_obs_v4)_(?P<reward_mode>sparse|coverage|safety|baseline_coverage|baseline_reward_v1|baseline_reward_v2|baseline_reward_v3)_(?P<timesteps>\d+)\.zip$"
 )
 
 MODEL_CLASSES = {
@@ -24,8 +24,8 @@ MODEL_CLASSES = {
     "dqn": DQN,
 }
 
-OBSERVATION_ORDER = ["full_grid", "compact"]
-REWARD_ORDER = ["sparse", "coverage", "safety"]
+OBSERVATION_ORDER = ["full_grid", "compact", "hybrid", "grid_cnn", "simple_progress", "baseline_obs_v1", "baseline_obs_v2", "baseline_obs_v3", "baseline_obs_v4"]
+REWARD_ORDER = ["sparse", "coverage", "safety", "baseline_coverage", "baseline_reward_v1", "baseline_reward_v2", "baseline_reward_v3"]
 
 
 @dataclass

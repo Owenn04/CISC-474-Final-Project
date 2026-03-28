@@ -187,6 +187,8 @@ class CoverageGridworld(gym.Env):
         self.steps_remaining = 500   # steps remaining in the episode
         self.enemy_list = []   # list of enemies. Populated by __create_enemy_from_map() or __spawn_enemy_fov()
         self.game_over = False   # if the episode has ended or not
+        self.position_history = [0]   # recent agent positions for anti-stall reward shaping
+        self.no_position_change_streak = 0   # consecutive steps ending on the same tile
 
         # Environment variables
         self.predefined_map = predefined_map   # map layout definition as a list of color ids, optional
@@ -247,6 +249,8 @@ class CoverageGridworld(gym.Env):
         self.steps_remaining = 500
         self.enemy_list = []
         self.game_over = False
+        self.position_history = [0]
+        self.no_position_change_streak = 0
 
         # Repopulates grid
         self.__populate_grid()
@@ -458,12 +462,15 @@ class CoverageGridworld(gym.Env):
         if self.steps_remaining <= 0:
             return None, 0, True, False, {}
 
+        previous_position = self.agent_pos
+
         # if action is STAY, doesn't move
         new_cell_covered = False
         move_blocked = False
+        revisited_cell = False
         stayed_still = action == STAY
         if action != 4:
-            new_cell_covered, move_blocked = self.__move(action)
+            new_cell_covered, move_blocked, revisited_cell = self.__move(action)
 
         # rotates enemies after agent's movement
         self.__rotate_enemies()
@@ -484,6 +491,19 @@ class CoverageGridworld(gym.Env):
         agent_col = self.agent_pos % self.grid_size
         in_enemy_fov = any((agent_row, agent_col) in enemy.get_fov_cells() for enemy in self.enemy_list)
         mission_success = self.coverable_cells == self.total_covered_cells and not self.game_over
+        no_position_change = self.agent_pos == previous_position
+        two_step_oscillation = (
+            len(self.position_history) >= 2
+            and self.agent_pos == self.position_history[-2]
+            and previous_position != self.agent_pos
+        )
+        if no_position_change:
+            self.no_position_change_streak += 1
+        else:
+            self.no_position_change_streak = 0
+        self.position_history.append(self.agent_pos)
+        if len(self.position_history) > 6:
+            self.position_history.pop(0)
 
         # creates info dictionary with extra state information
         info = {
@@ -497,6 +517,10 @@ class CoverageGridworld(gym.Env):
             "game_over": self.game_over,
             "stayed_still": stayed_still,
             "move_blocked": move_blocked,
+            "revisited_cell": revisited_cell,
+            "no_position_change": no_position_change,
+            "no_position_change_streak": self.no_position_change_streak,
+            "two_step_oscillation": two_step_oscillation,
             "in_enemy_fov": in_enemy_fov,
             "mission_success": mission_success
         }
@@ -518,6 +542,7 @@ class CoverageGridworld(gym.Env):
         x = agent_x + movement[action][1]
         new_cell_covered = False
         move_blocked = False
+        revisited_cell = False
 
         if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
             if self._is_color_in_cell(BROWN, y, x) or self._is_color_in_cell(GREEN, y, x):
@@ -531,12 +556,14 @@ class CoverageGridworld(gym.Env):
                 if self._is_color_in_cell(BLACK, y, x) or self._is_color_in_cell(RED, y, x):
                     self.total_covered_cells += 1
                     new_cell_covered = True
+                else:
+                    revisited_cell = True
                 # new agent's cell becomes GREY
                 self.grid[y, x] = np.asarray(GREY)
         else:
             move_blocked = True
 
-        return new_cell_covered, move_blocked
+        return new_cell_covered, move_blocked, revisited_cell
 
     def __rotate_enemies(self):
         """

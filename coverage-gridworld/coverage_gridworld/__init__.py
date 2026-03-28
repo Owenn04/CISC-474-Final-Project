@@ -64,6 +64,25 @@ register(
 )
 
 register(
+    id="custom_challenge",   # hard difficulty
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 2, 0, 0, 0, 0, 2, 0, 0],
+            [0, 0, 2, 0, 0, 0, 0, 0, 0, 4],
+            [0, 4, 2, 2, 0, 2, 0, 2, 0, 0],
+            [0, 2, 0, 0, 0, 0, 0, 2, 0, 0],
+            [0, 4, 2, 0, 2, 0, 0, 2, 0, 0],
+            [0, 0, 2, 0, 2, 0, 0, 0, 0, 0],
+            [0, 0, 2, 0, 0, 0, 0, 0, 2, 0],
+            [0, 0, 2, 0, 0, 0, 0, 2, 0, 0],
+            [0, 0, 0, 0, 4, 0, 4, 2, 0, 0],
+            [2, 0, 0, 0, 0, 0, 0, 2, 0, 4]
+        ]
+    }
+)
+
+register(
     id="chokepoint",   # hard difficulty
     entry_point="coverage_gridworld:CoverageGridworld",
     kwargs={
