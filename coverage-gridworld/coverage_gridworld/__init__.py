@@ -83,6 +83,82 @@ register(
 )
 
 register(
+    id="timing_corridor",   # timing-focused: narrow corridors with sequential guard timing
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 2, 2, 0, 2, 2, 2, 2, 0],
+            [0, 0, 0, 2, 0, 2, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 2, 0, 2, 2, 0],
+            [0, 2, 0, 0, 0, 0, 0, 2, 4, 0],
+            [0, 2, 2, 2, 2, 2, 0, 2, 0, 0],
+            [0, 0, 0, 0, 0, 2, 0, 2, 0, 0],
+            [2, 2, 2, 2, 0, 2, 0, 2, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 2, 0, 4],
+            [0, 2, 2, 2, 2, 2, 0, 0, 0, 0]
+        ]
+    }
+)
+
+register(
+    id="pocket_patrol",   # cleanup-focused: small pockets near guard influence
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 0, 0, 2, 0, 0, 0, 0, 0],
+            [0, 2, 2, 0, 2, 0, 2, 2, 2, 0],
+            [0, 0, 0, 0, 2, 0, 0, 0, 2, 0],
+            [0, 2, 0, 2, 2, 2, 2, 0, 2, 0],
+            [0, 2, 0, 0, 0, 4, 2, 0, 0, 0],
+            [0, 2, 2, 2, 0, 0, 2, 2, 2, 0],
+            [0, 0, 0, 2, 0, 0, 0, 0, 2, 0],
+            [0, 2, 0, 2, 2, 2, 2, 0, 2, 0],
+            [0, 2, 0, 0, 0, 0, 0, 0, 2, 4],
+            [0, 0, 0, 2, 2, 2, 2, 0, 0, 0]
+        ]
+    }
+)
+
+register(
+    id="crossroads_patrol",   # routing-focused: open spaces with central guard pressure
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 2, 0, 0, 0, 0, 2, 2, 0],
+            [0, 2, 0, 0, 2, 2, 0, 0, 2, 0],
+            [0, 0, 0, 0, 2, 2, 0, 0, 0, 0],
+            [0, 0, 2, 2, 4, 0, 2, 2, 0, 0],
+            [0, 0, 2, 2, 0, 4, 2, 2, 0, 0],
+            [0, 0, 0, 0, 2, 2, 0, 0, 0, 0],
+            [0, 2, 0, 0, 2, 2, 0, 0, 2, 0],
+            [0, 2, 2, 0, 0, 0, 0, 2, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        ]
+    }
+)
+
+register(
+    id="staggered_escape",   # sequencing-focused: chained guard passages with recovery space
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 2, 0, 0, 0, 0, 2, 0, 0],
+            [0, 0, 2, 0, 2, 2, 0, 2, 0, 4],
+            [0, 0, 2, 0, 0, 0, 0, 2, 0, 0],
+            [2, 0, 2, 2, 2, 0, 2, 2, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 2, 2, 0, 2, 2, 2, 2, 0],
+            [0, 0, 0, 2, 0, 0, 0, 2, 0, 0],
+            [0, 2, 0, 2, 2, 2, 0, 2, 0, 4],
+            [0, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 2, 2, 2, 2, 2, 0, 0]
+        ]
+    }
+)
+
+register(
     id="chokepoint",   # hard difficulty
     entry_point="coverage_gridworld:CoverageGridworld",
     kwargs={

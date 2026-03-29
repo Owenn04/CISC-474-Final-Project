@@ -7,6 +7,7 @@ from pathlib import Path
 
 import coverage_gridworld  # noqa: F401  # Required for Gymnasium env registration
 import gymnasium as gym
+from coverage_gridworld import custom as custom_runtime
 from stable_baselines3 import DQN, PPO
 
 
@@ -24,6 +25,11 @@ MAP_CHOICES = [
     "just_go",
     "safe",
     "maze",
+    "custom_challenge",
+    "timing_corridor",
+    "pocket_patrol",
+    "crossroads_patrol",
+    "staggered_escape",
     "chokepoint",
     "sneaky_enemies",
 ]
@@ -86,6 +92,9 @@ def main() -> None:
         observation_mode=observation_mode,
         reward_mode=reward_mode,
     )
+    custom_runtime.configure_runtime(env.unwrapped, observation_mode, reward_mode)
+    env.unwrapped.observation_space = custom_runtime.observation_space(env.unwrapped)
+    env.reset(seed=args.seed)
 
     try:
         for episode_index in range(args.episodes):
@@ -98,6 +107,7 @@ def main() -> None:
             while not done:
                 action, _ = model.predict(obs, deterministic=not args.stochastic)
                 obs, reward, terminated, truncated, info = env.step(action)
+                info = custom_runtime.enrich_info(info)
                 total_reward += float(reward)
                 steps += 1
                 done = bool(terminated or truncated)

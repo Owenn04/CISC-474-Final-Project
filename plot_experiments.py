@@ -11,6 +11,7 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from coverage_gridworld import custom as custom_runtime
 from stable_baselines3 import DQN, PPO
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
@@ -26,6 +27,23 @@ MODEL_CLASSES = {
 
 OBSERVATION_ORDER = ["full_grid", "compact", "hybrid", "grid_cnn", "simple_progress", "baseline_obs_v1", "baseline_obs_v2", "baseline_obs_v3", "baseline_obs_v4"]
 REWARD_ORDER = ["sparse", "coverage", "safety", "baseline_coverage", "baseline_reward_v1", "baseline_reward_v2", "baseline_reward_v3"]
+MAP_SETS = {
+    "all_standard_maps": ["just_go", "safe", "maze", "chokepoint", "sneaky_enemies"],
+    "all_standard_plus_custom": ["just_go", "safe", "maze", "custom_challenge", "chokepoint", "sneaky_enemies"],
+    "coverage_curriculum": ["just_go", "safe", "maze"],
+    "enemy_mix": [
+        "maze",
+        "custom_challenge",
+        "timing_corridor",
+        "pocket_patrol",
+        "crossroads_patrol",
+        "staggered_escape",
+        "chokepoint",
+        "sneaky_enemies",
+    ],
+    "generalization_train": ["safe", "maze", "chokepoint"],
+    "generalization_test": ["sneaky_enemies"],
+}
 
 
 @dataclass
@@ -65,15 +83,47 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def make_env(env_id: str, observation_mode: str, reward_mode: str, seed: int):
+def build_predefined_map_list(map_ids: list[str]) -> list[list[list[int]]]:
+    maps: list[list[list[int]]] = []
+    for map_id in map_ids:
+        spec = gym.spec(map_id)
+        predefined_map = spec.kwargs.get("predefined_map")
+        if predefined_map is None:
+            raise ValueError(f"Map '{map_id}' does not expose a predefined_map and cannot be used in a map set.")
+        maps.append([row[:] for row in predefined_map])
+    return maps
+
+
+def resolve_env_label(env_label: str) -> tuple[str, list[list[list[int]]] | None]:
+    base_label = env_label
+    if "_rand" in env_label:
+        prefix, suffix = env_label.rsplit("_rand", 1)
+        if prefix in MAP_SETS and suffix.isdigit():
+            base_label = prefix
+
+    if base_label in MAP_SETS:
+        return "standard", build_predefined_map_list(MAP_SETS[base_label])
+
+    return env_label, None
+
+
+def make_env(
+    env_id: str,
+    observation_mode: str,
+    reward_mode: str,
+    seed: int,
+    predefined_map_list: list[list[list[int]]] | None = None,
+):
     env = gym.make(
         env_id,
         render_mode=None,
-        predefined_map_list=None,
+        predefined_map_list=predefined_map_list,
         activate_game_status=False,
         observation_mode=observation_mode,
         reward_mode=reward_mode,
     )
+    custom_runtime.configure_runtime(env.unwrapped, observation_mode, reward_mode)
+    env.unwrapped.observation_space = custom_runtime.observation_space(env.unwrapped)
     env.reset(seed=seed)
     return env
 
@@ -176,8 +226,9 @@ def collect_training_curves(run: RunArtifact) -> pd.DataFrame:
 
 
 def evaluate_run(run: RunArtifact, eval_episodes: int, seed: int, env_id_override: str | None) -> pd.DataFrame:
-    env_id = env_id_override or run.env_id
-    env = make_env(env_id, run.observation_mode, run.reward_mode, seed)
+    env_label = env_id_override or run.env_id
+    env_id, predefined_map_list = resolve_env_label(env_label)
+    env = make_env(env_id, run.observation_mode, run.reward_mode, seed, predefined_map_list)
     model = MODEL_CLASSES[run.algorithm].load(run.model_path)
 
     episodes: list[dict[str, float | int | bool | str]] = []
@@ -193,6 +244,7 @@ def evaluate_run(run: RunArtifact, eval_episodes: int, seed: int, env_id_overrid
             while not done:
                 action, _ = model.predict(obs, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(action)
+                info = custom_runtime.enrich_info(info)
                 total_reward += float(reward)
                 steps += 1
                 done = bool(terminated or truncated)
@@ -403,7 +455,15 @@ def plot_tradeoff_scatter(summary_df: pd.DataFrame, output_dir: Path) -> None:
     fig, axis = plt.subplots(figsize=(10, 7))
 
     markers = {"ppo": "o", "dqn": "s"}
-    colors = {"sparse": "#d62728", "coverage": "#2ca02c", "safety": "#9467bd"}
+    colors = {
+        "sparse": "#d62728",
+        "coverage": "#2ca02c",
+        "safety": "#9467bd",
+        "baseline_coverage": "#8c564b",
+        "baseline_reward_v1": "#1f77b4",
+        "baseline_reward_v2": "#ff7f0e",
+        "baseline_reward_v3": "#17becf",
+    }
 
     for _, row in summary_df.iterrows():
         axis.scatter(
@@ -411,7 +471,7 @@ def plot_tradeoff_scatter(summary_df: pd.DataFrame, output_dir: Path) -> None:
             row["success_rate"],
             s=max(row["mean_coverage_per_step"] * 350, 20),
             marker=markers[row["algorithm"]],
-            color=colors[row["reward_mode"]],
+            color=colors.get(row["reward_mode"], "#7f7f7f"),
             alpha=0.8,
         )
         axis.text(

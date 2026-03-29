@@ -30,6 +30,209 @@ GREEN = np.asarray((31, 198, 0), dtype=np.uint8)
 RED = np.asarray((255, 0, 0), dtype=np.uint8)
 LIGHT_RED = np.asarray((255, 127, 127), dtype=np.uint8)
 
+ACTIVE_OBSERVATION_MODE = FULL_GRID_OBSERVATION
+ACTIVE_REWARD_MODE = COVERAGE_REWARD
+ACTIVE_ENV = None
+RUNTIME_TRACKER = {
+    "initialized": False,
+    "env_id": None,
+    "last_agent_pos": 0,
+    "position_history": [0],
+    "no_position_change_streak": 0,
+    "last_steps_remaining": None,
+    "last_total_covered_cells": None,
+}
+LAST_RAW_INFO_ID = None
+LAST_ENRICHED_INFO: dict | None = None
+
+
+def configure_runtime(env, observation_mode: str, reward_mode: str) -> None:
+    global ACTIVE_ENV, ACTIVE_OBSERVATION_MODE, ACTIVE_REWARD_MODE
+    ACTIVE_ENV = env
+    ACTIVE_OBSERVATION_MODE = observation_mode
+    ACTIVE_REWARD_MODE = reward_mode
+    setattr(env, "observation_mode", observation_mode)
+    setattr(env, "reward_mode", reward_mode)
+    setattr(env, "observation_space", observation_space(env))
+    _initialize_runtime_tracker(env)
+
+
+def _initialize_runtime_tracker(env: gym.Env | None) -> None:
+    global RUNTIME_TRACKER, LAST_RAW_INFO_ID, LAST_ENRICHED_INFO
+
+    if env is None:
+        RUNTIME_TRACKER = {
+            "initialized": False,
+            "env_id": None,
+            "last_agent_pos": 0,
+            "position_history": [0],
+            "no_position_change_streak": 0,
+            "last_steps_remaining": None,
+            "last_total_covered_cells": None,
+        }
+    else:
+        agent_pos = int(getattr(env, "agent_pos", 0))
+        steps_remaining = int(getattr(env, "steps_remaining", 500))
+        total_covered_cells = int(getattr(env, "total_covered_cells", 1))
+        RUNTIME_TRACKER = {
+            "initialized": True,
+            "env_id": id(env),
+            "last_agent_pos": agent_pos,
+            "position_history": [agent_pos],
+            "no_position_change_streak": 0,
+            "last_steps_remaining": steps_remaining,
+            "last_total_covered_cells": total_covered_cells,
+        }
+
+    LAST_RAW_INFO_ID = None
+    LAST_ENRICHED_INFO = None
+
+
+def _sync_runtime(env: gym.Env | None) -> None:
+    global ACTIVE_ENV
+    if env is None:
+        return
+
+    ACTIVE_ENV = env
+    if _runtime_reset_detected(env):
+        _initialize_runtime_tracker(env)
+
+
+def _runtime_reset_detected(env: gym.Env) -> bool:
+    if not RUNTIME_TRACKER["initialized"]:
+        return True
+    if RUNTIME_TRACKER["env_id"] != id(env):
+        return True
+
+    current_steps_remaining = int(getattr(env, "steps_remaining", 500))
+    current_total_covered = int(getattr(env, "total_covered_cells", 1))
+    current_agent_pos = int(getattr(env, "agent_pos", 0))
+    last_steps_remaining = RUNTIME_TRACKER["last_steps_remaining"]
+    last_total_covered = RUNTIME_TRACKER["last_total_covered_cells"]
+
+    if last_steps_remaining is None:
+        return True
+    if current_steps_remaining > last_steps_remaining:
+        return True
+    if current_total_covered < (last_total_covered if last_total_covered is not None else current_total_covered):
+        return True
+    if current_steps_remaining == 500 and current_total_covered == 1 and current_agent_pos == 0:
+        if last_steps_remaining != 500 or RUNTIME_TRACKER["last_agent_pos"] != 0:
+            return True
+
+    return False
+
+
+def _agent_in_enemy_fov(env: gym.Env) -> bool:
+    agent_row = env.agent_pos // env.grid_size
+    agent_col = env.agent_pos % env.grid_size
+    return any((agent_row, agent_col) in enemy.get_fov_cells() for enemy in env.enemy_list)
+
+
+def _peek_enriched_info(info: dict) -> dict:
+    if ACTIVE_ENV is None:
+        return dict(info)
+
+    env = ACTIVE_ENV
+    _sync_runtime(env)
+
+    enriched = dict(info)
+    enriched.setdefault("agent_pos", int(getattr(env, "agent_pos", 0)))
+    enriched.setdefault("total_covered_cells", int(getattr(env, "total_covered_cells", 0)))
+    enriched.setdefault(
+        "coverable_cells",
+        int(getattr(env, "coverable_cells", info.get("coverable_cells", 0))),
+    )
+    enriched.setdefault(
+        "cells_remaining",
+        int(enriched["coverable_cells"]) - int(enriched["total_covered_cells"]),
+    )
+    enriched.setdefault("steps_remaining", int(getattr(env, "steps_remaining", info.get("steps_remaining", 0))))
+    enriched.setdefault("game_over", bool(getattr(env, "game_over", info.get("game_over", False))))
+    enriched.setdefault("in_enemy_fov", _agent_in_enemy_fov(env))
+    enriched.setdefault(
+        "mission_success",
+        bool(enriched["coverable_cells"] == enriched["total_covered_cells"] and not enriched["game_over"]),
+    )
+    return enriched
+
+
+def _advance_runtime_tracker(enriched_info: dict) -> None:
+    global RUNTIME_TRACKER
+
+    agent_pos = int(enriched_info["agent_pos"])
+    position_history = list(RUNTIME_TRACKER["position_history"])
+    position_history.append(agent_pos)
+    if len(position_history) > 6:
+        position_history.pop(0)
+
+    RUNTIME_TRACKER["initialized"] = True
+    RUNTIME_TRACKER["env_id"] = id(ACTIVE_ENV) if ACTIVE_ENV is not None else None
+    RUNTIME_TRACKER["last_agent_pos"] = agent_pos
+    RUNTIME_TRACKER["position_history"] = position_history
+    RUNTIME_TRACKER["no_position_change_streak"] = int(enriched_info["no_position_change_streak"])
+    RUNTIME_TRACKER["last_steps_remaining"] = int(enriched_info["steps_remaining"])
+    RUNTIME_TRACKER["last_total_covered_cells"] = int(enriched_info["total_covered_cells"])
+
+
+def _enrich_step_info(info: dict) -> dict:
+    global LAST_RAW_INFO_ID, LAST_ENRICHED_INFO
+
+    enriched = _peek_enriched_info(info)
+    env = ACTIVE_ENV
+    if env is None:
+        LAST_RAW_INFO_ID = id(info)
+        LAST_ENRICHED_INFO = enriched
+        return enriched
+
+    previous_agent_pos = int(RUNTIME_TRACKER["last_agent_pos"])
+    position_history = RUNTIME_TRACKER["position_history"]
+    new_cell_covered = bool(enriched.get("new_cell_covered", False))
+    current_agent_pos = int(enriched["agent_pos"])
+    no_position_change = current_agent_pos == previous_agent_pos
+    no_position_change_streak = (
+        int(RUNTIME_TRACKER["no_position_change_streak"]) + 1 if no_position_change else 0
+    )
+    two_step_oscillation = bool(
+        len(position_history) >= 2
+        and current_agent_pos == position_history[-2]
+        and previous_agent_pos != current_agent_pos
+    )
+    stationary_without_progress = bool(no_position_change and not new_cell_covered)
+    revisited_cell = bool((not no_position_change) and (not new_cell_covered))
+
+    enriched.update(
+        {
+            "revisited_cell": bool(enriched.get("revisited_cell", revisited_cell)),
+            "no_position_change": bool(enriched.get("no_position_change", no_position_change)),
+            "no_position_change_streak": int(
+                enriched.get("no_position_change_streak", no_position_change_streak)
+            ),
+            "two_step_oscillation": bool(
+                enriched.get("two_step_oscillation", two_step_oscillation)
+            ),
+            "in_enemy_fov": bool(enriched.get("in_enemy_fov", _agent_in_enemy_fov(env))),
+            "mission_success": bool(
+                enriched.get(
+                    "mission_success",
+                    enriched["coverable_cells"] == enriched["total_covered_cells"] and not enriched["game_over"],
+                )
+            ),
+            "stationary_without_progress": stationary_without_progress,
+        }
+    )
+
+    _advance_runtime_tracker(enriched)
+    LAST_RAW_INFO_ID = id(info)
+    LAST_ENRICHED_INFO = dict(enriched)
+    return enriched
+
+
+def enrich_info(info: dict) -> dict:
+    if LAST_RAW_INFO_ID == id(info) and LAST_ENRICHED_INFO is not None:
+        return dict(LAST_ENRICHED_INFO)
+    return _peek_enriched_info(info)
+
 
 def _normalized_agent_position(agent_pos: int, grid_size: int) -> tuple[float, float]:
     row = agent_pos // grid_size
@@ -272,7 +475,7 @@ def observation_space(env: gym.Env) -> gym.spaces.Space:
     """
     Observation space from Gymnasium (https://gymnasium.farama.org/api/spaces/)
     """
-    observation_mode = getattr(env, "observation_mode", FULL_GRID_OBSERVATION)
+    observation_mode = getattr(env, "observation_mode", ACTIVE_OBSERVATION_MODE)
 
     if observation_mode == FULL_GRID_OBSERVATION:
         return gym.spaces.Box(
@@ -349,11 +552,20 @@ def observation_space(env: gym.Env) -> gym.spaces.Space:
     raise ValueError(f"Unsupported observation mode: {observation_mode}")
 
 
-def observation(env: gym.Env):
+def observation(env_or_grid):
     """
     Function that returns the observation for the current state of the environment.
     """
-    observation_mode = getattr(env, "observation_mode", FULL_GRID_OBSERVATION)
+    if isinstance(env_or_grid, np.ndarray):
+        if ACTIVE_ENV is None or ACTIVE_OBSERVATION_MODE == FULL_GRID_OBSERVATION:
+            return env_or_grid.flatten()
+        _sync_runtime(ACTIVE_ENV)
+        env = ACTIVE_ENV
+    else:
+        env = env_or_grid
+        _sync_runtime(env)
+
+    observation_mode = getattr(env, "observation_mode", ACTIVE_OBSERVATION_MODE)
 
     if observation_mode == FULL_GRID_OBSERVATION:
         return env.grid.flatten()
@@ -413,17 +625,23 @@ def reward(info: dict, reward_mode: str = COVERAGE_REWARD) -> float:
     - in_enemy_fov (bool): if the agent ended the step inside an enemy field of view,
     - mission_success (bool): if the map was fully covered without losing.
     """
-    cells_remaining = info["cells_remaining"]
-    new_cell_covered = info["new_cell_covered"]
-    game_over = info["game_over"]
-    stayed_still = info["stayed_still"]
-    move_blocked = info["move_blocked"]
-    revisited_cell = info["revisited_cell"]
-    no_position_change = info["no_position_change"]
-    no_position_change_streak = info["no_position_change_streak"]
-    two_step_oscillation = info["two_step_oscillation"]
-    in_enemy_fov = info["in_enemy_fov"]
-    mission_success = info["mission_success"]
+    reward_mode = reward_mode or ACTIVE_REWARD_MODE
+
+    enriched = _enrich_step_info(info)
+    cells_remaining = enriched.get("cells_remaining", 0)
+    coverable_cells = max(enriched.get("coverable_cells", 1), 1)
+    steps_remaining = enriched.get("steps_remaining", 0)
+    new_cell_covered = enriched.get("new_cell_covered", False)
+    game_over = enriched.get("game_over", False)
+    stayed_still = enriched.get("stayed_still", False)
+    move_blocked = enriched.get("move_blocked", False)
+    revisited_cell = enriched.get("revisited_cell", False)
+    no_position_change = enriched.get("no_position_change", False)
+    no_position_change_streak = enriched.get("no_position_change_streak", 0)
+    two_step_oscillation = enriched.get("two_step_oscillation", False)
+    in_enemy_fov = enriched.get("in_enemy_fov", False)
+    mission_success = enriched.get("mission_success", False)
+    stationary_without_progress = enriched.get("stationary_without_progress", False)
 
     if reward_mode == SPARSE_REWARD:
         if game_over:
@@ -436,7 +654,7 @@ def reward(info: dict, reward_mode: str = COVERAGE_REWARD) -> float:
         value = -0.01
         if new_cell_covered:
             value += 1.0
-        if move_blocked or stayed_still:
+        if move_blocked or stayed_still or stationary_without_progress:
             value -= 0.05
         if mission_success:
             value += 50.0
@@ -448,7 +666,7 @@ def reward(info: dict, reward_mode: str = COVERAGE_REWARD) -> float:
         value = -0.01
         if new_cell_covered:
             value += 1.0
-        if move_blocked or stayed_still:
+        if move_blocked or stayed_still or stationary_without_progress:
             value -= 0.05
         if mission_success:
             value += 50.0
@@ -461,10 +679,10 @@ def reward(info: dict, reward_mode: str = COVERAGE_REWARD) -> float:
         return value
 
     if reward_mode == BASELINE_REWARD_V3:
-        value = -0.01
+        value = -0.03
         if new_cell_covered:
             value += 1.0
-        if move_blocked or stayed_still:
+        if move_blocked or stayed_still or stationary_without_progress:
             value -= 0.05
         if mission_success:
             value += 50.0
@@ -474,14 +692,17 @@ def reward(info: dict, reward_mode: str = COVERAGE_REWARD) -> float:
             value -= 0.1
         if game_over:
             value -= 4.0
-        if cells_remaining <= 5 and not new_cell_covered:
-            value -= 0.03
-        if info["steps_remaining"] <= 0 and not mission_success:
+        if cells_remaining <= 10:
+            if new_cell_covered:
+                value += 0.2
+            else:
+                value -= 0.1
+        if steps_remaining <= 0 and not mission_success:
             value -= 2.0 * cells_remaining
         return value
 
     if reward_mode == COVERAGE_REWARD:
-        cover_ratio = 1.0 - (cells_remaining / max(info["coverable_cells"], 1))
+        cover_ratio = 1.0 - (cells_remaining / coverable_cells)
         value = -0.01
         if new_cell_covered:
             value += 1.0
@@ -505,7 +726,7 @@ def reward(info: dict, reward_mode: str = COVERAGE_REWARD) -> float:
         return value
 
     if reward_mode == SAFETY_REWARD:
-        cover_ratio = 1.0 - (cells_remaining / max(info["coverable_cells"], 1))
+        cover_ratio = 1.0 - (cells_remaining / coverable_cells)
         value = -0.01
         if new_cell_covered:
             value += 0.9

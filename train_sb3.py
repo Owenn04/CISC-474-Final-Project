@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import copy
 from pathlib import Path
-import random
 
 import gymnasium as gym
 import coverage_gridworld 
+from coverage_gridworld import custom as custom_runtime
 import torch as th
 from torch import nn
 from stable_baselines3 import DQN, PPO
@@ -24,7 +24,16 @@ MAP_SETS = {
     "all_standard_maps": ["just_go", "safe", "maze", "chokepoint", "sneaky_enemies"],
     "all_standard_plus_custom": ["just_go", "safe", "maze", "custom_challenge", "chokepoint", "sneaky_enemies"],
     "coverage_curriculum": ["just_go", "safe", "maze"],
-    "enemy_mix": ["maze", "chokepoint", "sneaky_enemies"],
+    "enemy_mix": [
+        "maze",
+        "custom_challenge",
+        "timing_corridor",
+        "pocket_patrol",
+        "crossroads_patrol",
+        "staggered_escape",
+        "chokepoint",
+        "sneaky_enemies",
+    ],
     "generalization_train": ["safe", "maze", "chokepoint"],
     "generalization_test": ["sneaky_enemies"],
 }
@@ -54,61 +63,6 @@ class SmallGridCNN(BaseFeaturesExtractor):
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.linear(self.cnn(observations.float()))
-
-
-class MixedMapEnv(gym.Env):
-    def __init__(
-        self,
-        *,
-        observation_mode: str,
-        reward_mode: str,
-        fixed_maps: list[list[list[int]]],
-        random_standard_prob: float,
-        render_mode: str | None = None,
-        activate_game_status: bool = False,
-        seed: int = 42,
-    ):
-        super().__init__()
-        self.base_env = gym.make(
-            "standard",
-            render_mode=render_mode,
-            predefined_map_list=None,
-            activate_game_status=activate_game_status,
-            observation_mode=observation_mode,
-            reward_mode=reward_mode,
-        )
-        self.observation_space = self.base_env.observation_space
-        self.action_space = self.base_env.action_space
-        self.fixed_maps = [copy.deepcopy(map_layout) for map_layout in fixed_maps]
-        self.random_standard_prob = random_standard_prob
-        self.fixed_map_index = 0
-        self.rng = random.Random(seed)
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        if seed is not None:
-            self.rng.seed(seed)
-
-        use_random_standard = self.rng.random() < self.random_standard_prob
-        unwrapped = self.base_env.unwrapped
-        unwrapped.predefined_map_list = None
-        unwrapped.current_predefined_map = 0
-
-        if use_random_standard:
-            unwrapped.predefined_map = None
-        else:
-            unwrapped.predefined_map = copy.deepcopy(self.fixed_maps[self.fixed_map_index])
-            self.fixed_map_index = (self.fixed_map_index + 1) % len(self.fixed_maps)
-
-        return self.base_env.reset(seed=seed, options=options)
-
-    def step(self, action):
-        return self.base_env.step(action)
-
-    def render(self):
-        return self.base_env.render()
-
-    def close(self):
-        self.base_env.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -181,7 +135,7 @@ def parse_args() -> argparse.Namespace:
         "--random-standard-prob",
         type=float,
         default=0.0,
-        help="When used with --map-set, probability that an episode uses a random 'standard' map instead of the next fixed map.",
+        help="Not supported with the immutable env.py setup. Leave at 0.0.",
     )
     return parser.parse_args()
 
@@ -207,26 +161,19 @@ def make_env(
     random_standard_prob: float = 0.0,
     render: bool = False,
 ) -> Monitor:
+    if random_standard_prob > 0.0:
+        raise ValueError("random_standard_prob is not supported without modifying env.py or using wrappers.")
     render_mode = "human" if render else None
-    if predefined_map_list is not None and random_standard_prob > 0.0:
-        env = MixedMapEnv(
-            observation_mode=observation_mode,
-            reward_mode=reward_mode,
-            fixed_maps=predefined_map_list,
-            random_standard_prob=random_standard_prob,
-            render_mode=render_mode,
-            activate_game_status=False,
-            seed=seed,
-        )
-    else:
-        env = gym.make(
-            env_id,
-            render_mode=render_mode,
-            predefined_map_list=predefined_map_list,
-            activate_game_status=False,
-            observation_mode=observation_mode,
-            reward_mode=reward_mode,
-        )
+    env = gym.make(
+        env_id,
+        render_mode=render_mode,
+        predefined_map_list=predefined_map_list,
+        activate_game_status=False,
+        observation_mode=observation_mode,
+        reward_mode=reward_mode,
+    )
+    custom_runtime.configure_runtime(env.unwrapped, observation_mode, reward_mode)
+    env.unwrapped.observation_space = custom_runtime.observation_space(env.unwrapped)
     env.reset(seed=seed)
     return Monitor(env)
 
