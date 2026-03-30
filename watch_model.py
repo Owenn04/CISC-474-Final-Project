@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Render saved Coverage Gridworld models for qualitative inspection.
+
+The environment already knows how to render itself; this script provides the
+playback harness that loads a trained SB3 model, configures the runtime modes,
+and prints concise episode summaries while the map is being shown.
+"""
+
 import argparse
 import re
 import time
@@ -11,8 +18,14 @@ from coverage_gridworld import custom as custom_runtime
 from stable_baselines3 import DQN, PPO
 
 
+def _build_mode_pattern(values: tuple[str, ...]) -> str:
+    """Return a regex alternation that safely matches the given mode names."""
+
+    return "|".join(re.escape(value) for value in values)
+
+
 MODEL_PATTERN = re.compile(
-    r"^(?P<algorithm>ppo|dqn)_(?P<env_id>.+)_(?P<observation_mode>full_grid|compact|hybrid|grid_cnn|simple_progress|baseline_obs_v1|baseline_obs_v2|baseline_obs_v3|baseline_obs_v4)_(?P<reward_mode>sparse|coverage|safety|baseline_coverage|baseline_reward_v1|baseline_reward_v2|baseline_reward_v3)_(?P<timesteps>\d+)\.zip$"
+    rf"^(?P<algorithm>ppo|dqn)_(?P<env_id>.+)_(?P<observation_mode>{_build_mode_pattern(custom_runtime.OBSERVATION_MODES)})_(?P<reward_mode>{_build_mode_pattern(custom_runtime.REWARD_MODES)})_(?P<timesteps>\d+)\.zip$"
 )
 
 MODEL_CLASSES = {
@@ -27,15 +40,20 @@ MAP_CHOICES = [
     "maze",
     "custom_challenge",
     "timing_corridor",
-    "pocket_patrol",
-    "crossroads_patrol",
     "staggered_escape",
+    "patrol_weave",
+    "enemy_spine",
+    "sidepass_patrol",
+    "triple_patrol",
+    "pressure_spokes",
     "chokepoint",
     "sneaky_enemies",
 ]
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for model playback."""
+
     parser = argparse.ArgumentParser(
         description="Render a saved model playing Coverage Gridworld on a selected map."
     )
@@ -63,6 +81,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def parse_model_metadata(model_path: Path) -> dict[str, str]:
+    """Extract algorithm and runtime modes from the saved model filename."""
+
     match = MODEL_PATTERN.match(model_path.name)
     if not match:
         raise ValueError(
@@ -74,6 +94,8 @@ def parse_model_metadata(model_path: Path) -> dict[str, str]:
 
 
 def main() -> None:
+    """Load a saved model, roll it out, and print episode-level results."""
+
     args = parse_args()
     model_path = Path(args.model)
     metadata = parse_model_metadata(model_path)

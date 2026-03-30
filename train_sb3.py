@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+"""Train Stable Baselines 3 agents on Coverage Gridworld.
+
+This script is the main training entry point used throughout the project. It
+keeps the immutable ``env.py`` untouched and configures custom observation and
+reward behavior through ``coverage_gridworld.custom`` at runtime.
+"""
+
 import argparse
 import copy
 from pathlib import Path
 
 import gymnasium as gym
-import coverage_gridworld 
+import coverage_gridworld  # noqa: F401  # Required for Gymnasium env registration
 from coverage_gridworld import custom as custom_runtime
 import torch as th
 from torch import nn
@@ -28,9 +35,32 @@ MAP_SETS = {
         "maze",
         "custom_challenge",
         "timing_corridor",
-        "pocket_patrol",
-        "crossroads_patrol",
         "staggered_escape",
+        "chokepoint",
+        "sneaky_enemies",
+    ],
+    "enemy_mix_large": [
+        "maze",
+        "custom_challenge",
+        "timing_corridor",
+        "staggered_escape",
+        "patrol_weave",
+        "enemy_spine",
+        "sidepass_patrol",
+        "chokepoint",
+        "sneaky_enemies",
+    ],
+    "frontier_mix_large": [
+        "safe",
+        "maze",
+        "custom_challenge",
+        "timing_corridor",
+        "staggered_escape",
+        "patrol_weave",
+        "enemy_spine",
+        "sidepass_patrol",
+        "triple_patrol",
+        "pressure_spokes",
         "chokepoint",
         "sneaky_enemies",
     ],
@@ -40,6 +70,8 @@ MAP_SETS = {
 
 
 class SmallGridCNN(BaseFeaturesExtractor):
+    """Small CNN used when the observation is emitted as a grid tensor."""
+
     def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 128):
         super().__init__(observation_space, features_dim)
         channels = observation_space.shape[0]
@@ -66,6 +98,8 @@ class SmallGridCNN(BaseFeaturesExtractor):
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for training and post-training evaluation."""
+
     parser = argparse.ArgumentParser(
         description="Train a Stable Baselines 3 agent on Coverage Gridworld."
     )
@@ -110,13 +144,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--observation-mode",
-        choices=["full_grid", "compact", "hybrid", "grid_cnn", "simple_progress", "baseline_obs_v1", "baseline_obs_v2", "baseline_obs_v3", "baseline_obs_v4"],
+        choices=custom_runtime.OBSERVATION_MODES,
         default="full_grid",
         help="Observation mode exposed by the environment.",
     )
     parser.add_argument(
         "--reward-mode",
-        choices=["sparse", "coverage", "safety", "baseline_coverage", "baseline_reward_v1", "baseline_reward_v2", "baseline_reward_v3"],
+        choices=custom_runtime.REWARD_MODES,
         default="coverage",
         help="Reward mode exposed by the environment.",
     )
@@ -141,6 +175,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_predefined_map_list(map_ids: list[str]) -> list[list[list[int]]]:
+    """Resolve registered map ids into deep-copied predefined maps for rotation."""
+
     maps: list[list[list[int]]] = []
     for map_id in map_ids:
         spec = gym.spec(map_id)
@@ -161,6 +197,8 @@ def make_env(
     random_standard_prob: float = 0.0,
     render: bool = False,
 ) -> Monitor:
+    """Create a monitored environment configured for the selected runtime modes."""
+
     if random_standard_prob > 0.0:
         raise ValueError("random_standard_prob is not supported without modifying env.py or using wrappers.")
     render_mode = "human" if render else None
@@ -179,6 +217,8 @@ def make_env(
 
 
 def build_model(algorithm: str, env: Monitor, log_dir: Path, seed: int):
+    """Instantiate the requested SB3 model with sensible defaults for the task."""
+
     model_class = SUPPORTED_ALGORITHMS[algorithm]
     observation_shape = getattr(env.observation_space, "shape", ())
     policy = "CnnPolicy" if len(observation_shape) == 3 else "MlpPolicy"
@@ -204,7 +244,40 @@ def build_model(algorithm: str, env: Monitor, log_dir: Path, seed: int):
     raise ValueError(f"Unsupported algorithm: {algorithm}")
 
 
+def latest_matching_log_dir(log_root: Path, run_name: str) -> Path | None:
+    """Return the newest SB3 TensorBoard directory created for ``run_name``."""
+
+    matches = [
+        path
+        for path in log_root.glob(f"{run_name}*")
+        if path.is_dir()
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda path: path.stat().st_mtime)
+
+
+def finalize_log_dir(log_root: Path, run_name: str) -> Path | None:
+    """Rename the SB3-created TensorBoard directory to an exact descriptive name."""
+
+    created_log_dir = latest_matching_log_dir(log_root, run_name)
+    if created_log_dir is None:
+        return None
+
+    target_dir = log_root / run_name
+    if created_log_dir == target_dir:
+        return target_dir
+
+    if target_dir.exists():
+        return target_dir
+
+    created_log_dir.rename(target_dir)
+    return target_dir
+
+
 def main() -> None:
+    """Train a model, save it, and run a deterministic evaluation pass."""
+
     args = parse_args()
 
     output_dir = Path(args.output_dir)
@@ -219,6 +292,11 @@ def main() -> None:
         predefined_map_list = build_predefined_map_list(MAP_SETS[args.map_set])
         train_env_id = "standard"
 
+    env_label = args.map_set or args.env_id
+    if args.map_set is not None and args.random_standard_prob > 0.0:
+        env_label = f"{env_label}_rand{int(args.random_standard_prob * 100):02d}"
+    run_name = f"{args.algorithm}_{env_label}_{args.observation_mode}_{args.reward_mode}_{args.timesteps}"
+
     train_env = make_env(
         train_env_id,
         seed=args.seed,
@@ -228,16 +306,11 @@ def main() -> None:
         random_standard_prob=args.random_standard_prob,
     )
     model = build_model(args.algorithm, train_env, log_dir, args.seed)
-    model.learn(total_timesteps=args.timesteps, progress_bar=True)
+    model.learn(total_timesteps=args.timesteps, progress_bar=True, tb_log_name=run_name)
 
-    env_label = args.map_set or args.env_id
-    if args.map_set is not None and args.random_standard_prob > 0.0:
-        env_label = f"{env_label}_rand{int(args.random_standard_prob * 100):02d}"
-
-    model_path = model_dir / (
-        f"{args.algorithm}_{env_label}_{args.observation_mode}_{args.reward_mode}_{args.timesteps}.zip"
-    )
+    model_path = model_dir / f"{run_name}.zip"
     model.save(model_path)
+    finalize_log_dir(log_dir, run_name)
 
     eval_env_id = args.eval_env_id or train_env_id
     eval_predefined_map_list = predefined_map_list if eval_env_id == "standard" else None

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Analyze saved Coverage Gridworld runs and generate report-friendly outputs.
+
+The script discovers saved models, maps them to TensorBoard logs, evaluates each
+run deterministically, and exports CSV summaries plus a compact set of plots for
+comparison across observation and reward variants.
+"""
+
 import argparse
 import math
 import re
@@ -16,8 +23,14 @@ from stable_baselines3 import DQN, PPO
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 
+def _build_mode_pattern(values: tuple[str, ...]) -> str:
+    """Return a regex alternation that safely matches the given mode names."""
+
+    return "|".join(re.escape(value) for value in values)
+
+
 MODEL_PATTERN = re.compile(
-    r"^(?P<algorithm>ppo|dqn)_(?P<env_id>.+)_(?P<observation_mode>full_grid|compact|hybrid|grid_cnn|simple_progress|baseline_obs_v1|baseline_obs_v2|baseline_obs_v3|baseline_obs_v4)_(?P<reward_mode>sparse|coverage|safety|baseline_coverage|baseline_reward_v1|baseline_reward_v2|baseline_reward_v3)_(?P<timesteps>\d+)\.zip$"
+    rf"^(?P<algorithm>ppo|dqn)_(?P<env_id>.+)_(?P<observation_mode>{_build_mode_pattern(custom_runtime.OBSERVATION_MODES)})_(?P<reward_mode>{_build_mode_pattern(custom_runtime.REWARD_MODES)})_(?P<timesteps>\d+)\.zip$"
 )
 
 MODEL_CLASSES = {
@@ -25,8 +38,8 @@ MODEL_CLASSES = {
     "dqn": DQN,
 }
 
-OBSERVATION_ORDER = ["full_grid", "compact", "hybrid", "grid_cnn", "simple_progress", "baseline_obs_v1", "baseline_obs_v2", "baseline_obs_v3", "baseline_obs_v4"]
-REWARD_ORDER = ["sparse", "coverage", "safety", "baseline_coverage", "baseline_reward_v1", "baseline_reward_v2", "baseline_reward_v3"]
+OBSERVATION_ORDER = list(custom_runtime.OBSERVATION_MODES)
+REWARD_ORDER = list(custom_runtime.REWARD_MODES)
 MAP_SETS = {
     "all_standard_maps": ["just_go", "safe", "maze", "chokepoint", "sneaky_enemies"],
     "all_standard_plus_custom": ["just_go", "safe", "maze", "custom_challenge", "chokepoint", "sneaky_enemies"],
@@ -35,9 +48,32 @@ MAP_SETS = {
         "maze",
         "custom_challenge",
         "timing_corridor",
-        "pocket_patrol",
-        "crossroads_patrol",
         "staggered_escape",
+        "chokepoint",
+        "sneaky_enemies",
+    ],
+    "enemy_mix_large": [
+        "maze",
+        "custom_challenge",
+        "timing_corridor",
+        "staggered_escape",
+        "patrol_weave",
+        "enemy_spine",
+        "sidepass_patrol",
+        "chokepoint",
+        "sneaky_enemies",
+    ],
+    "frontier_mix_large": [
+        "safe",
+        "maze",
+        "custom_challenge",
+        "timing_corridor",
+        "staggered_escape",
+        "patrol_weave",
+        "enemy_spine",
+        "sidepass_patrol",
+        "triple_patrol",
+        "pressure_spokes",
         "chokepoint",
         "sneaky_enemies",
     ],
@@ -48,6 +84,8 @@ MAP_SETS = {
 
 @dataclass
 class RunArtifact:
+    """Saved model plus the metadata needed for evaluation and plotting."""
+
     algorithm: str
     env_id: str
     observation_mode: str
@@ -56,6 +94,7 @@ class RunArtifact:
     model_path: Path
     model_mtime: float
     log_dir: Path | None = None
+    log_match_method: str | None = None
 
     @property
     def run_id(self) -> str:
@@ -67,6 +106,8 @@ class RunArtifact:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for experiment analysis."""
+
     parser = argparse.ArgumentParser(
         description="Generate evaluation summaries and training plots for saved Coverage Gridworld runs."
     )
@@ -84,6 +125,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_predefined_map_list(map_ids: list[str]) -> list[list[list[int]]]:
+    """Resolve registered map ids into deep-copied predefined maps for evaluation."""
+
     maps: list[list[list[int]]] = []
     for map_id in map_ids:
         spec = gym.spec(map_id)
@@ -95,6 +138,8 @@ def build_predefined_map_list(map_ids: list[str]) -> list[list[list[int]]]:
 
 
 def resolve_env_label(env_label: str) -> tuple[str, list[list[list[int]]] | None]:
+    """Map a saved filename label back to an evaluable env id and optional map list."""
+
     base_label = env_label
     if "_rand" in env_label:
         prefix, suffix = env_label.rsplit("_rand", 1)
@@ -114,6 +159,8 @@ def make_env(
     seed: int,
     predefined_map_list: list[list[list[int]]] | None = None,
 ):
+    """Create an evaluation environment configured for the selected runtime modes."""
+
     env = gym.make(
         env_id,
         render_mode=None,
@@ -129,6 +176,8 @@ def make_env(
 
 
 def discover_model_runs(models_dir: Path) -> list[RunArtifact]:
+    """Find saved models that follow the standard training filename scheme."""
+
     runs: list[RunArtifact] = []
     for model_path in sorted(models_dir.glob("*.zip")):
         match = MODEL_PATTERN.match(model_path.name)
@@ -154,32 +203,102 @@ def discover_model_runs(models_dir: Path) -> list[RunArtifact]:
 
 
 def event_file_mtime(log_dir: Path) -> float:
+    """Return the newest TensorBoard event-file modification time for a log dir."""
+
     event_files = sorted(log_dir.glob("events.out.tfevents.*"))
     if not event_files:
         return -math.inf
     return max(path.stat().st_mtime for path in event_files)
 
 
-def map_logs_to_runs(runs: list[RunArtifact], logs_dir: Path) -> None:
+def is_legacy_log_dir(path: Path) -> bool:
+    """Return whether ``path`` is an old auto-numbered SB3 log directory."""
+
+    return bool(re.fullmatch(r"(PPO|DQN)_\d+", path.name))
+
+
+def assign_exact_log_dirs(runs: list[RunArtifact], logs_dir: Path) -> tuple[list[RunArtifact], list[Path]]:
+    """Assign logs whose directory name exactly matches the saved model stem."""
+
+    unassigned_runs: list[RunArtifact] = []
+    used_logs: set[Path] = set()
+
+    for run in runs:
+        exact_dir = logs_dir / run.model_path.stem
+        if exact_dir.is_dir():
+            run.log_dir = exact_dir
+            run.log_match_method = "exact_name"
+            used_logs.add(exact_dir)
+        else:
+            unassigned_runs.append(run)
+
+    remaining_logs = [
+        path for path in logs_dir.iterdir()
+        if path.is_dir() and path not in used_logs
+    ]
+    return unassigned_runs, remaining_logs
+
+
+def assign_validated_legacy_logs(runs: list[RunArtifact], log_dirs: list[Path], max_time_delta_seconds: float = 180.0) -> None:
+    """Assign old numbered log dirs only when the nearest timestamp match is unique.
+
+    A legacy match is accepted only when:
+    - algorithm matches
+    - the run and log are each other's nearest candidate by event-file mtime
+    - the absolute time delta is within the allowed window
+    """
+
     for algorithm in sorted({run.algorithm for run in runs}):
-        algorithm_runs = sorted(
-            [run for run in runs if run.algorithm == algorithm],
-            key=lambda run: run.model_mtime,
-        )
-        algorithm_logs = sorted(
-            [path for path in logs_dir.glob(f"{algorithm.upper()}_*") if path.is_dir()],
-            key=event_file_mtime,
-        )
+        algorithm_runs = [run for run in runs if run.algorithm == algorithm and run.log_dir is None]
+        algorithm_logs = [
+            path for path in log_dirs
+            if is_legacy_log_dir(path) and path.name.startswith(algorithm.upper())
+        ]
+        if not algorithm_runs or not algorithm_logs:
+            continue
 
-        if len(algorithm_logs) > len(algorithm_runs):
-            # Drop the oldest extra logs. This handles stale runs such as the failed PPO_1 trial.
-            algorithm_logs = algorithm_logs[-len(algorithm_runs):]
+        log_times = {path: event_file_mtime(path) for path in algorithm_logs}
+        nearest_log_for_run: dict[int, tuple[Path, float] | None] = {}
+        for run in algorithm_runs:
+            candidates = [
+                (path, abs(log_times[path] - run.model_mtime))
+                for path in algorithm_logs
+                if math.isfinite(log_times[path])
+            ]
+            nearest_log_for_run[id(run)] = min(candidates, key=lambda item: item[1]) if candidates else None
 
-        for run, log_dir in zip(algorithm_runs, algorithm_logs):
-            run.log_dir = log_dir
+        nearest_run_for_log: dict[Path, tuple[int, float] | None] = {}
+        for path in algorithm_logs:
+            candidates = [
+                (id(run), abs(log_times[path] - run.model_mtime))
+                for run in algorithm_runs
+            ]
+            nearest_run_for_log[path] = min(candidates, key=lambda item: item[1]) if candidates else None
+
+        for run in algorithm_runs:
+            log_candidate = nearest_log_for_run.get(id(run))
+            if log_candidate is None:
+                continue
+            log_dir, delta = log_candidate
+            reverse_candidate = nearest_run_for_log.get(log_dir)
+            if reverse_candidate is None:
+                continue
+            reverse_run_id, reverse_delta = reverse_candidate
+            if reverse_run_id == id(run) and delta <= max_time_delta_seconds and reverse_delta <= max_time_delta_seconds:
+                run.log_dir = log_dir
+                run.log_match_method = "validated_legacy_time"
+
+
+def map_logs_to_runs(runs: list[RunArtifact], logs_dir: Path) -> None:
+    """Match logs to runs using exact names first and validated legacy timestamps second."""
+
+    unassigned_runs, remaining_logs = assign_exact_log_dirs(runs, logs_dir)
+    assign_validated_legacy_logs(unassigned_runs, remaining_logs)
 
 
 def select_scalar_tag(tags: list[str], candidates: list[str]) -> str | None:
+    """Pick the first available TensorBoard scalar tag from a preferred list."""
+
     for candidate in candidates:
         if candidate in tags:
             return candidate
@@ -187,6 +306,8 @@ def select_scalar_tag(tags: list[str], candidates: list[str]) -> str | None:
 
 
 def extract_scalar_series(log_dir: Path, metric: str, candidates: list[str]) -> pd.DataFrame:
+    """Extract a single scalar series from a TensorBoard log directory."""
+
     event_files = sorted(log_dir.glob("events.out.tfevents.*"))
     if not event_files:
         return pd.DataFrame(columns=["step", "value", "metric"])
@@ -208,6 +329,8 @@ def extract_scalar_series(log_dir: Path, metric: str, candidates: list[str]) -> 
 
 
 def collect_training_curves(run: RunArtifact) -> pd.DataFrame:
+    """Collect the training reward and episode-length curves for one run."""
+
     if run.log_dir is None:
         return pd.DataFrame(columns=["run_id", "algorithm", "observation_mode", "reward_mode", "metric", "step", "value"])
 
@@ -222,10 +345,33 @@ def collect_training_curves(run: RunArtifact) -> pd.DataFrame:
     curve["algorithm"] = run.algorithm
     curve["observation_mode"] = run.observation_mode
     curve["reward_mode"] = run.reward_mode
+    curve["log_match_method"] = run.log_match_method or "unmatched"
     return curve
 
 
+def build_log_assignment_df(runs: list[RunArtifact]) -> pd.DataFrame:
+    """Summarize which log directory, if any, was matched to each model."""
+
+    return pd.DataFrame(
+        [
+            {
+                "model_name": run.model_path.name,
+                "algorithm": run.algorithm,
+                "env_id": run.env_id,
+                "observation_mode": run.observation_mode,
+                "reward_mode": run.reward_mode,
+                "timesteps": run.timesteps,
+                "log_dir": run.log_dir.name if run.log_dir is not None else "",
+                "log_match_method": run.log_match_method or "unmatched",
+            }
+            for run in runs
+        ]
+    )
+
+
 def evaluate_run(run: RunArtifact, eval_episodes: int, seed: int, env_id_override: str | None) -> pd.DataFrame:
+    """Run deterministic evaluation episodes for one saved model."""
+
     env_label = env_id_override or run.env_id
     env_id, predefined_map_list = resolve_env_label(env_label)
     env = make_env(env_id, run.observation_mode, run.reward_mode, seed, predefined_map_list)
@@ -285,6 +431,8 @@ def evaluate_run(run: RunArtifact, eval_episodes: int, seed: int, env_id_overrid
 
 
 def summarize_evaluations(episode_df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate per-episode evaluation data into a report-friendly run summary."""
+
     group_keys = ["run_id", "algorithm", "observation_mode", "reward_mode"]
     grouped = (
         episode_df.groupby(group_keys, as_index=False)
@@ -361,6 +509,8 @@ def summarize_evaluations(episode_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_training_curves(training_df: pd.DataFrame, output_dir: Path) -> None:
+    """Plot smoothed training reward and episode-length curves by algorithm."""
+
     if training_df.empty:
         return
 
@@ -393,6 +543,8 @@ def plot_training_curves(training_df: pd.DataFrame, output_dir: Path) -> None:
 
 
 def annotate_heatmap(axis, matrix: np.ndarray) -> None:
+    """Write numeric labels directly into a heatmap matrix."""
+
     for row_index in range(matrix.shape[0]):
         for column_index in range(matrix.shape[1]):
             value = matrix[row_index, column_index]
@@ -401,6 +553,8 @@ def annotate_heatmap(axis, matrix: np.ndarray) -> None:
 
 
 def plot_metric_heatmaps(summary_df: pd.DataFrame, output_dir: Path) -> None:
+    """Render metric heatmaps across observation and reward combinations."""
+
     metrics = [
         ("success_rate", "Evaluation Success Rate", "heatmap_success_rate.png"),
         ("mean_cover_ratio", "Average Coverage Ratio", "heatmap_cover_ratio.png"),
@@ -437,6 +591,8 @@ def plot_metric_heatmaps(summary_df: pd.DataFrame, output_dir: Path) -> None:
 
 
 def plot_model_ranking(summary_df: pd.DataFrame, output_dir: Path) -> None:
+    """Plot the composite selection score ranking for all discovered runs."""
+
     ranking = summary_df.sort_values("selection_score", ascending=True)
 
     fig, axis = plt.subplots(figsize=(12, 7))
@@ -452,6 +608,8 @@ def plot_model_ranking(summary_df: pd.DataFrame, output_dir: Path) -> None:
 
 
 def plot_tradeoff_scatter(summary_df: pd.DataFrame, output_dir: Path) -> None:
+    """Plot the tradeoff between average coverage and success rate."""
+
     fig, axis = plt.subplots(figsize=(10, 7))
 
     markers = {"ppo": "o", "dqn": "s"}
@@ -463,6 +621,7 @@ def plot_tradeoff_scatter(summary_df: pd.DataFrame, output_dir: Path) -> None:
         "baseline_reward_v1": "#1f77b4",
         "baseline_reward_v2": "#ff7f0e",
         "baseline_reward_v3": "#17becf",
+        "baseline_reward_v4": "#bcbd22",
     }
 
     for _, row in summary_df.iterrows():
@@ -491,6 +650,8 @@ def plot_tradeoff_scatter(summary_df: pd.DataFrame, output_dir: Path) -> None:
 
 
 def plot_episode_distributions(episode_df: pd.DataFrame, output_dir: Path) -> None:
+    """Plot boxplots of per-episode coverage ratios for each run."""
+
     fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
     for axis, algorithm in zip(axes, ["ppo", "dqn"]):
         subset = episode_df[episode_df["algorithm"] == algorithm].copy()
@@ -526,6 +687,8 @@ def plot_episode_distributions(episode_df: pd.DataFrame, output_dir: Path) -> No
 
 
 def main() -> None:
+    """Generate CSV summaries and plots for all discovered saved runs."""
+
     args = parse_args()
 
     models_dir = Path(args.models_dir)
@@ -535,6 +698,7 @@ def main() -> None:
 
     runs = discover_model_runs(models_dir)
     map_logs_to_runs(runs, logs_dir)
+    log_assignment_df = build_log_assignment_df(runs)
 
     training_curves = pd.concat([collect_training_curves(run) for run in runs], ignore_index=True)
     episode_df = pd.concat(
@@ -546,6 +710,7 @@ def main() -> None:
     summary_df.to_csv(output_dir / "evaluation_summary.csv", index=False)
     episode_df.to_csv(output_dir / "evaluation_episodes.csv", index=False)
     training_curves.to_csv(output_dir / "training_curves.csv", index=False)
+    log_assignment_df.to_csv(output_dir / "log_assignments.csv", index=False)
 
     plot_training_curves(training_curves, output_dir)
     plot_metric_heatmaps(summary_df, output_dir)
