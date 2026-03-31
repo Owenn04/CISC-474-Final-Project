@@ -236,7 +236,12 @@ def build_model(algorithm: str, env: Monitor, log_dir: Path, seed: int):
         }
 
     if algorithm == "ppo":
-        return model_class(policy, **common_kwargs)
+        return model_class(
+            policy,
+            ent_coef=0.01,
+            policy_kwargs={"net_arch": [256, 256]},
+            **common_kwargs,
+        )
 
     if algorithm == "dqn":
         return model_class(policy, learning_starts=1_000, buffer_size=50_000, **common_kwargs)

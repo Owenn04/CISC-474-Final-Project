@@ -731,7 +731,7 @@ def observation(env_or_grid):
     raise ValueError(f"Unsupported observation mode: {observation_mode}")
 
 
-def reward(info: dict, reward_mode: str = COVERAGE_REWARD) -> float:
+def reward(info: dict, reward_mode: str = None) -> float:
     """Calculate the step reward for the selected reward mode.
 
     The immutable env provides only a minimal ``info`` dictionary, so this
