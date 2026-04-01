@@ -807,7 +807,7 @@ def reward(info: dict, reward_mode: str = None) -> float:
             value -= 0.1
         if game_over:
             value -= 4.0
-        if cells_remaining <= 12:
+        if cells_remaining <= 10:
             if new_cell_covered:
                 value += 0.2
             else:

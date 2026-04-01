@@ -45,7 +45,9 @@ MAP_CHOICES = [
     "enemy_spine",
     "sidepass_patrol",
     "triple_patrol",
-    "pressure_spokes",
+    "quadrants",
+    "closed_quadrants",
+    "double_maze",
     "chokepoint",
     "sneaky_enemies",
 ]
