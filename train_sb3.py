@@ -73,12 +73,15 @@ MAP_SETS = {
         "patrol_weave",
         "enemy_spine", 
         "sidepass_patrol", 
-        "triple_patrol", 
+        "triple_patrol",  #
         "quadrants",
         "closed_quadrants",
         "double_maze",
         "chokepoint",
-        "sneaky_enemies",
+        "sneaky_enemies_train",
+        "challenge",
+        "sneaky",
+        "sneaky_enemies", #
     ],
     "generalization_train": ["safe", "maze", "chokepoint"],
     "generalization_test": ["sneaky_enemies"],

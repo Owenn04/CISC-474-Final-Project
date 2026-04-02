@@ -48,6 +48,9 @@ MAP_CHOICES = [
     "quadrants",
     "closed_quadrants",
     "double_maze",
+    "sneaky_enemies_train",
+    "challenge",
+    "sneaky",
     "chokepoint",
     "sneaky_enemies",
 ]

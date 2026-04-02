@@ -34,6 +34,25 @@ register(
 )
 
 register(
+    id="challenge", 
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 2, 2, 2, 2, 2, 2, 2, 0],
+            [0, 2, 0, 0, 0, 4, 0, 0, 2, 0],
+            [0, 2, 0, 0, 0, 0, 0, 0, 2, 0],
+            [0, 2, 0, 0, 0, 0, 0, 0, 2, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 4, 0, 2, 0, 0, 2, 0, 4, 0],
+            [0, 2, 2, 2, 0, 0, 2, 2, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        ]
+    }
+)
+
+register(
     id="safe",   # easy difficulty
     entry_point="coverage_gridworld:CoverageGridworld",
     kwargs={
@@ -67,6 +86,25 @@ register(
             [0, 2, 0, 2, 0, 2, 2, 2, 2, 0],
             [0, 2, 0, 2, 0, 4, 2, 4, 0, 0],
             [0, 0, 0, 2, 0, 0, 0, 0, 0, 0]
+        ]
+    }
+)
+
+register(
+    id="sneaky",  
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0]
         ]
     }
 )
@@ -224,7 +262,7 @@ register(
 )
 
 register(
-    id="quadrants",   # very easy difficulty
+    id="quadrants",   
     entry_point="coverage_gridworld:CoverageGridworld",
     kwargs={
         "predefined_map": [
@@ -243,7 +281,7 @@ register(
 )
 
 register(
-    id="closed_quadrants",   # very easy difficulty
+    id="closed_quadrants",   
     entry_point="coverage_gridworld:CoverageGridworld",
     kwargs={
         "predefined_map": [
@@ -276,6 +314,25 @@ register(
             [0, 0, 2, 0, 0, 0, 0, 2, 0, 0],
             [0, 0, 0, 0, 4, 0, 4, 2, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 2, 0, 0]
+        ]
+    }
+)
+
+register(
+    id="sneaky_enemies_train",  
+    entry_point="coverage_gridworld:CoverageGridworld",
+    kwargs={
+        "predefined_map": [
+            [3, 0, 0, 0, 0, 0, 0, 4, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 0, 2, 0, 0, 2, 0, 2, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 2, 4, 2, 0, 0, 2, 0, 2, 0]
         ]
     }
 )
